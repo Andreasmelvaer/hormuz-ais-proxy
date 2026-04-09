@@ -1,9 +1,9 @@
 /**
  * AISstream WebSocket proxy for Hormuz Tracker.
- * Deployed on Fly.io — connects to AISstream server-side,
- * relays AIS messages to browser clients via WebSocket.
+ * HTTP server with WebSocket upgrade — works on Render, Fly.io, etc.
  */
 
+import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 
 const API_KEY = process.env.AISSTREAM_API_KEY || '';
@@ -65,8 +65,31 @@ function connectUpstream() {
   });
 }
 
-// WebSocket server
-const wss = new WebSocketServer({ port: PORT });
+// HTTP server — needed for Render/Fly health checks and WebSocket upgrade
+const server = createServer((req, res) => {
+  // CORS headers for browser preflight
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', '*');
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
+  // Health check / status endpoint
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({
+    status: 'ok',
+    upstream: upstreamConnected,
+    clients: clients.size,
+    messages: messageCount,
+  }));
+});
+
+// WebSocket server attached to HTTP server
+const wss = new WebSocketServer({ server });
 
 wss.on('connection', (ws) => {
   clients.add(ws);
@@ -84,5 +107,7 @@ wss.on('connection', (ws) => {
   });
 });
 
-connectUpstream();
-console.log(`[proxy] Listening on port ${PORT}`);
+server.listen(PORT, () => {
+  console.log(`[proxy] HTTP + WebSocket server on port ${PORT}`);
+  connectUpstream();
+});
