@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: hormuz-ais-proxy
+    runtime: node
+    region: frankfurt
+    plan: free
+    buildCommand: npm install
+    startCommand: node proxy.mjs
+    envVars:
+      - key: AISSTREAM_API_KEY
+        sync: false

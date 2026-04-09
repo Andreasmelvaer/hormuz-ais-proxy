@@ -1,0 +1,12 @@
+{
+  "name": "hormuz-ais-proxy",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "proxy.mjs",
+  "scripts": {
+    "start": "node proxy.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.19.0"
+  }
+}
