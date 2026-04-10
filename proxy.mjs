@@ -12,7 +12,7 @@ if (!API_KEY) {
   process.exit(1);
 }
 
-const PORT = parseInt(process.env.PORT || '8080', 10);
+const PORT = parseInt(process.env.PORT || '10000', 10);
 const AIS_URL = 'wss://stream.aisstream.io/v0/stream';
 
 // Strait of Hormuz bounding box
@@ -21,17 +21,26 @@ const BBOX = [[[25.8, 55.5], [27.2, 57.2]]];
 let messageCount = 0;
 let upstreamConnected = false;
 let upstream = null;
+let reconnectDelay = 5000;
 const clients = new Set();
 
 function connectUpstream() {
   if (upstream && upstream.readyState === WebSocket.OPEN) return;
 
-  console.log('[proxy] Connecting to AISstream.io...');
-  upstream = new WebSocket(AIS_URL);
+  console.log(`[proxy] Connecting to AISstream.io (retry in ${reconnectDelay/1000}s on fail)...`);
+
+  try {
+    upstream = new WebSocket(AIS_URL);
+  } catch (err) {
+    console.error('[proxy] Failed to create WebSocket:', err.message);
+    scheduleReconnect();
+    return;
+  }
 
   upstream.on('open', () => {
     console.log('[proxy] Connected to AISstream. Subscribing...');
     upstreamConnected = true;
+    reconnectDelay = 5000; // reset backoff on success
     upstream.send(JSON.stringify({
       APIKey: API_KEY,
       BoundingBoxes: BBOX,
@@ -58,16 +67,22 @@ function connectUpstream() {
   });
 
   upstream.on('close', () => {
-    console.log('[proxy] Upstream disconnected. Reconnecting in 5s...');
+    console.log('[proxy] Upstream disconnected.');
     upstreamConnected = false;
     upstream = null;
-    setTimeout(connectUpstream, 5000);
+    scheduleReconnect();
   });
 }
 
-// HTTP server — needed for Render/Fly health checks and WebSocket upgrade
+function scheduleReconnect() {
+  console.log(`[proxy] Reconnecting in ${reconnectDelay/1000}s...`);
+  setTimeout(connectUpstream, reconnectDelay);
+  // Exponential backoff: 5s -> 10s -> 20s -> 40s -> max 60s
+  reconnectDelay = Math.min(reconnectDelay * 2, 60000);
+}
+
+// HTTP server — needed for Render health checks and WebSocket upgrade
 const server = createServer((req, res) => {
-  // CORS headers for browser preflight
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', '*');
@@ -78,7 +93,6 @@ const server = createServer((req, res) => {
     return;
   }
 
-  // Health check / status endpoint
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({
     status: 'ok',
@@ -107,15 +121,19 @@ wss.on('connection', (ws) => {
   });
 });
 
+// Start HTTP server first, THEN connect upstream
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`[proxy] HTTP + WebSocket server on 0.0.0.0:${PORT}`);
-  connectUpstream();
+  console.log(`[proxy] HTTP + WS server listening on 0.0.0.0:${PORT}`);
 
-  // Self-ping to prevent Render free tier from spinning down
+  // Delay upstream connect to let server fully start
+  setTimeout(connectUpstream, 1000);
+
+  // Self-ping to prevent Render free tier spin-down
   const RENDER_URL = process.env.RENDER_EXTERNAL_URL;
   if (RENDER_URL) {
+    console.log(`[proxy] Self-ping enabled: ${RENDER_URL}`);
     setInterval(() => {
       fetch(RENDER_URL).catch(() => {});
-    }, 4 * 60 * 1000); // every 4 minutes
+    }, 4 * 60 * 1000);
   }
 });
