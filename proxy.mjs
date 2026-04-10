@@ -107,7 +107,15 @@ wss.on('connection', (ws) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`[proxy] HTTP + WebSocket server on port ${PORT}`);
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`[proxy] HTTP + WebSocket server on 0.0.0.0:${PORT}`);
   connectUpstream();
+
+  // Self-ping to prevent Render free tier from spinning down
+  const RENDER_URL = process.env.RENDER_EXTERNAL_URL;
+  if (RENDER_URL) {
+    setInterval(() => {
+      fetch(RENDER_URL).catch(() => {});
+    }, 4 * 60 * 1000); // every 4 minutes
+  }
 });
